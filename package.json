@@ -8,7 +8,8 @@
   "scripts": {
     "start": "bun run index.ts",
     "dev": "bun run index.ts --verbose",
-    "debug": "bun run index.ts --debug"
+    "debug": "bun run index.ts --debug",
+    "postinstall": "bun run install.ts"
   },
   "author": {
     "name": "D3FAU4T",
