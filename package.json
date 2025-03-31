@@ -1,0 +1,24 @@
+{
+  "name": "sql-runner",
+  "description": "A simple SQL runner for Bun",
+  "version": "1.0.0",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "bun run index.ts",
+    "dev": "bun run index.ts --verbose",
+    "debug": "bun run index.ts --debug"
+  },
+  "author": {
+    "name": "D3FAU4T",
+    "email": "d3fau4t@gmail.com",
+    "url": "https://github.com/D3FAU4T"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
