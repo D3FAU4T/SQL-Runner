@@ -25,7 +25,7 @@ const queries = (await Bun.file("runner.sql").text())
     .split(";")
     .map(query =>
         query
-            .replace(/--.*$/gm, "") // Remove comments (both inline and full-line)
+            .replace(/(--|#).*$/gm, "") // Remove comments (both inline and full-line)
             .replace(/\r\n|\n/g, " ") // Replace newlines with spaces
             .replace(/\s+/g, " ") // Collapse multiple spaces
             .replace(/,\s*\)$/, ")") // Remove trailing comma before ')'
