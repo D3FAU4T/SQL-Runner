@@ -51,7 +51,9 @@ try {
                     if (isDebug || isVerbose) console.log(`Database "${dbName}" created.`);
                 }
             }
-        } else if (normalizedQuery.startsWith("DROP DATABASE")) {
+        }
+        
+        else if (normalizedQuery.startsWith("DROP DATABASE")) {
             const match = query.match(/DROP DATABASE (IF EXISTS )?(\w+);?/i);
             if (match) {
                 const [, ifExists, dbName] = match;
@@ -67,13 +69,27 @@ try {
                     if (isDebug || isVerbose) console.log(`Database "${dbName}" dropped.`);
                 } else if (!ifExists) throw new Error(`Database "${dbName}" does not exist.`);
             }
-        } else if (normalizedQuery.startsWith("USE")) {
+        }
+
+        else if (normalizedQuery.startsWith("USE")) {
             const match = query.match(/USE (\w+);?/i);
             if (match) {
                 const [, dbName] = match;
                 useDatabase(dbName ?? "Runner");
             }
-        } else {
+        }
+
+        else if (normalizedQuery.startsWith("DESC")) {
+            const match = query.match(/DESC (\w+);?/i);
+            if (match) {
+                const [, tableName] = match;
+                if (!db) throw new Error("No database selected.");
+                const transaction = db.query(`PRAGMA table_info(${tableName});`).all();
+                if (transaction.length > 0) console.table(transaction);
+            }
+        }
+        
+        else {
             if (!db) throw new Error("No database selected.");
 
             const transaction = db.query(query + ";").all();
