@@ -52,7 +52,7 @@ try {
                 }
             }
         }
-        
+
         else if (normalizedQuery.startsWith("DROP DATABASE")) {
             const match = query.match(/DROP DATABASE (IF EXISTS )?(\w+);?/i);
             if (match) {
@@ -88,7 +88,13 @@ try {
                 if (transaction.length > 0) console.table(transaction);
             }
         }
-        
+
+        else if (normalizedQuery.startsWith("SHOW TABLES")) {
+            if (!db) throw new Error("No database selected.");
+            const transaction = db.query("SELECT tbl_name FROM sqlite_master WHERE type = 'table';").all();
+            if (transaction.length > 0) console.table(transaction);
+        }
+
         else {
             if (!db) throw new Error("No database selected.");
 
