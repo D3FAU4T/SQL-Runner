@@ -35,8 +35,11 @@ const queries = (await Bun.file("runner.sql").text())
 
 if (isDebug) console.log("Queries to execute:", queries);
 
+let failedQuery = '';
+
 try {
     for (const query of queries) {
+        failedQuery = query;
         const normalizedQuery = query.toUpperCase();
 
         if (normalizedQuery.startsWith("CREATE DATABASE")) {
@@ -106,4 +109,5 @@ try {
 } catch (e) {
     const err = e as Error;
     console.log(`\x1b[31m${err.name}\x1b[0m`, err.message);
+    console.error(failedQuery);
 }
