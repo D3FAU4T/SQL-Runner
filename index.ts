@@ -21,17 +21,51 @@ const useDatabase = (databaseName: string) => {
 
 db = new Database(defaultDbPath);
 
-const queries = (await Bun.file("runner.sql").text())
-    .split(";")
-    .map(query =>
-        query
-            .replace(/(--|#).*$/gm, "") // Remove comments (both inline and full-line)
-            .replace(/\r\n|\n/g, " ") // Replace newlines with spaces
-            .replace(/\s+/g, " ") // Collapse multiple spaces
-            .replace(/,\s*\)$/, ")") // Remove trailing comma before ')'
-            .trim() // Remove leading and trailing whitespace
-    )
-    .filter(query => query.length > 0); // Filter out empty queries
+const rawSQL = await Bun.file("runner.sql").text();
+
+const cleanedSQL = rawSQL
+    .replace(/(--|#).*$/gm, "") // Remove comments
+    .replace(/\r\n|\n/g, " ") // Replace newlines with spaces
+    .replace(/\s+/g, " ") // Collapse multiple spaces
+    .replace(/,\s*\)/g, ")") // Remove trailing comma before ')'
+    .trim();
+
+const queries: string[] = [];
+let currentQuery = "";
+let insideBlock = false;
+
+for (let i = 0; i < cleanedSQL.length; i++) {
+    currentQuery += cleanedSQL[i];
+
+    if (!insideBlock) {
+        if (
+            currentQuery.trimStart().toUpperCase().startsWith("DECLARE")
+            || currentQuery.trimStart().toUpperCase().startsWith("BEGIN")
+        ) insideBlock = true;
+    }
+
+    if (cleanedSQL[i] === ";") {
+        if (insideBlock) {
+            // Peek backwards to see if the previous non-space characters are 'END;'
+            const check = currentQuery.trim().toUpperCase();
+            if (check.endsWith("END;")) {
+                queries.push(currentQuery.trim());
+                currentQuery = "";
+                insideBlock = false;
+            }
+        }
+        
+        // Else: still inside block, do nothing yet
+        else {
+            queries.push(currentQuery.trim());
+            currentQuery = "";
+        }
+    }
+}
+
+// Just in case any leftover
+if (currentQuery.trim().length > 0)
+    queries.push(currentQuery.trim());
 
 if (isDebug) console.log("Queries to execute:", queries);
 
@@ -48,8 +82,11 @@ try {
                 const [, ifNotExists, dbName] = match;
                 const dbPath = join(databasesDir, `${dbName}.db`);
                 if (existsSync(dbPath)) {
-                    if (!ifNotExists) throw new Error(`Database "${dbName}" already exists.`);
-                } else {
+                    if (!ifNotExists)
+                        throw new Error(`Database "${dbName}" already exists.`);
+                }
+                
+                else {
                     new Database(dbPath).close();
                     if (isDebug || isVerbose) console.log(`Database "${dbName}" created.`);
                 }
@@ -70,7 +107,9 @@ try {
                     tempDb.close();
                     rmSync(dbPath);
                     if (isDebug || isVerbose) console.log(`Database "${dbName}" dropped.`);
-                } else if (!ifExists) throw new Error(`Database "${dbName}" does not exist.`);
+                }
+                
+                else if (!ifExists) throw new Error(`Database "${dbName}" does not exist.`);
             }
         }
 
@@ -98,11 +137,14 @@ try {
             if (transaction.length > 0) console.table(transaction);
         }
 
+        else if (/DECLARE.+BEGIN.+END/i.test(normalizedQuery)) {
+            if (!db) throw new Error("No database selected.");
+            await runOracleEmulation(query, db);
+        }
+
         else {
             if (!db) throw new Error("No database selected.");
-
             const transaction = db.query(query + ";").all();
-
             if (transaction.length > 0) console.table(transaction);
         }
     }
@@ -110,4 +152,108 @@ try {
     const err = e as Error;
     console.log(`\x1b[31m${err.name}\x1b[0m`, err.message);
     console.error(failedQuery);
+}
+
+async function runOracleEmulation(sqlBlock: string, db: Database) {
+    const vars: Record<string, any> = {};
+    const { declare, begin } = splitIntoDeclareAndBegin(sqlBlock);
+
+    if (declare) parseAndAssignVars(declare, vars);
+    if (begin) await executeBeginBlock(begin, vars, db);
+}
+
+function splitIntoDeclareAndBegin(sql: string) {
+    const declareMatch = sql.match(/DECLARE([\s\S]*?)BEGIN/i);
+    const beginMatch = sql.match(/BEGIN([\s\S]*)END/i);
+
+    return {
+        declare: declareMatch ? declareMatch[1]?.trim() : null,
+        begin: beginMatch ? beginMatch[1]?.trim() : null,
+    };
+}
+
+function parseAndAssignVars(declareBlock: string, vars: Record<string, any>) {
+    const lines = declareBlock.split(/;/).map(line => line.trim()).filter(Boolean);
+
+    for (const line of lines) {
+        const match = line.match(/(\w+)\s+\w+\s*(:=\s*(.+))?/i);
+        if (match) {
+            const [, varName, , value] = match;
+            if (value && varName)
+                vars[varName] = evaluateExpression(value.trim(), vars);
+            
+            else if (varName)
+                vars[varName] = null;
+        }
+    }
+}
+
+async function executeBeginBlock(beginBlock: string, vars: Record<string, any>, db: Database) {
+    const lines = beginBlock.split(/;/).map(line => line.trim()).filter(Boolean);
+
+    for (const line of lines) {
+        if (line.includes(":=")) {
+            const [left, right] = line.split(":=").map(part => part.trim());
+            if (left) 
+                vars[left] = evaluateExpression(right ?? "", vars);
+        } 
+        
+        else if (/DBMS_OUTPUT\.PUT_LINE/i.test(line)) {
+            const contentMatch = line.match(/DBMS_OUTPUT\.PUT_LINE\s*\((.+)\)/i);
+
+            if (contentMatch) {
+                let outputContent = contentMatch[1] ?? '';
+        
+                // Replace variable references in the output string
+                outputContent = outputContent.replace(/\|\|/g, "+"); // Oracle uses || for string concat
+        
+                // Replace variables inside the string
+                for (const [key, value] of Object.entries(vars)) {
+                    const regex = new RegExp(`\\b${key}\\b`, "g");
+                    outputContent = outputContent.replace(regex, JSON.stringify(value));
+                }
+
+                // Evaluate the final output
+                const finalOutput = eval(outputContent);
+                console.log(finalOutput);
+            }
+        }
+
+        else {
+            const sql = replaceVarsInSQL(line, vars);
+            const prepared = db.query(sql);
+            try {
+                const rows = prepared.all();
+                if (rows.length > 0) console.table(rows);
+            }
+            
+            catch { prepared.run(); }
+        }
+    }
+}
+
+function evaluateExpression(expr: string, vars: Record<string, any>): any {
+    const withVars = expr.replace(/\b(\w+)\b/g, (match) => {
+        if (vars.hasOwnProperty(match))
+            return JSON.stringify(vars[match]);
+
+        return match;
+    });
+
+    try { return eval(withVars); }
+    catch { return withVars; }
+}
+
+function replaceVarsInSQL(sql: string, vars: Record<string, any>): string {
+    return sql.replace(/\b(\w+)\b/g, (match) => {
+        if (vars.hasOwnProperty(match)) {
+            const value = vars[match];
+            if (typeof value === "string")
+                return `'${value}'`;
+
+            else return String(value);
+        }
+        
+        return match;
+    });
 }
